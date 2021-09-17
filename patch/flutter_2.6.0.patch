@@ -1,0 +1,477 @@
+diff --git a/packages/flutter_tools/gradle/flutter.gradle b/packages/flutter_tools/gradle/flutter.gradle
+index 5a9131d7e3..8e73269df8 100644
+--- a/packages/flutter_tools/gradle/flutter.gradle
++++ b/packages/flutter_tools/gradle/flutter.gradle
+@@ -705,6 +705,10 @@ class FlutterPlugin implements Plugin<Project> {
+         if (project.hasProperty('validate-deferred-components')) {
+             validateDeferredComponentsValue = project.property('validate-deferred-components').toBoolean()
+         }
++        Boolean buildApkValue = false
++        if (project.hasProperty('build-apk')) {
++            buildApkValue = project.property('build-apk').toBoolean()
++        }
+         def targetPlatforms = getTargetPlatforms()
+         def addFlutterDeps = { variant ->
+             if (shouldSplitPerAbi()) {
+@@ -748,6 +752,7 @@ class FlutterPlugin implements Plugin<Project> {
+                 codeSizeDirectory codeSizeDirectoryValue
+                 deferredComponents deferredComponentsValue
+                 validateDeferredComponents validateDeferredComponentsValue
++                buildApk buildApkValue
+                 doLast {
+                     project.exec {
+                         if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+@@ -973,7 +978,8 @@ abstract class BaseFlutterTask extends DefaultTask {
+     Boolean deferredComponents
+     @Optional @Input
+     Boolean validateDeferredComponents
+-
++    @Optional @Input
++    Boolean buildApk
+     @OutputFiles
+     FileCollection getDependenciesFiles() {
+         FileCollection depfiles = project.files()
+@@ -1056,6 +1062,9 @@ abstract class BaseFlutterTask extends DefaultTask {
+             if (extraFrontEndOptions != null) {
+                 args "--ExtraFrontEndOptions=${extraFrontEndOptions}"
+             }
++            if(buildApk != null){
++                args "--build-apk"
++            }
+             args ruleNames
+         }
+     }
+diff --git a/packages/flutter_tools/lib/src/android/gradle.dart b/packages/flutter_tools/lib/src/android/gradle.dart
+index be013075f0..5a20b531d7 100644
+--- a/packages/flutter_tools/lib/src/android/gradle.dart
++++ b/packages/flutter_tools/lib/src/android/gradle.dart
+@@ -294,6 +294,9 @@ class AndroidGradleBuilder implements AndroidBuilder {
+       command.add('-Ptarget=$target');
+     }
+     final List<DeferredComponent>? deferredComponents = project.manifest.deferredComponents;
++    final bool buildApk = buildInfo.androidProjectArgs.contains('build-apk=true');
++    final bool shrink =!buildApk || !buildInfo.androidProjectArgs.contains('multi=true');
++    bool r8 = true;
+     if (deferredComponents != null) {
+       if (deferredComponentsEnabled) {
+         command.add('-Pdeferred-components=true');
+@@ -305,6 +308,7 @@ class AndroidGradleBuilder implements AndroidBuilder {
+       for (final DeferredComponent component in deferredComponents) {
+         componentNames.add(component.name);
+       }
++      if (shrink) {
+       if (componentNames.isNotEmpty) {
+         command.add('-Pdeferred-component-names=${componentNames.join(',')}');
+         // Multi-apk applications cannot use shrinking. This is only relevant when using
+@@ -314,6 +318,8 @@ class AndroidGradleBuilder implements AndroidBuilder {
+           'not available for multi-apk applications. This limitation is expected to be removed '
+           'when Gradle plugin 4.2+ is available in Flutter.', color: TerminalColor.yellow);
+         command.add('-Pshrink=false');
++        r8 = false;
++      }
+       }
+     }
+     command.addAll(androidBuildInfo.buildInfo.toGradleConfig());
+@@ -364,6 +370,42 @@ class AndroidGradleBuilder implements AndroidBuilder {
+         },
+         mapFunction: consumeLog,
+       );
++
++      final BuildMode buildMode = buildInfo.mode;
++      final Directory dirBase = project.directory
++          .childDirectory('build')
++          .childDirectory('app')
++          .childDirectory('intermediates')
++          .childDirectory('dex')
++          .childDirectory(buildMode.name);
++
++      final File r8ClassesDexFile = dirBase
++          .childDirectory('minify${buildMode.name}WithR8')
++          .childFile('classes.dex');
++      final String first = buildMode.name[0].toUpperCase();
++      final String other = buildMode.name.substring(1);
++      final File mergeClassesDexFile = dirBase
++          .childDirectory('mergeDex$first$other')
++          .childFile('classes.dex');
++      final File classesDexFile =  r8
++          ? r8ClassesDexFile
++          :mergeClassesDexFile;
++      if (classesDexFile.existsSync()) {
++        final Directory versionBase = project.directory
++            .childDirectory('build')
++            .childDirectory('deferred_libs')
++            .childDirectory(project.manifest.buildName ?? 'error_buildName')
++            .childDirectory(project.manifest.buildNumber ?? '0');
++        classesDexFile.copySync(versionBase.childFile('classes.dex').path);
++
++        final Digest digest = sha256.convert(classesDexFile.readAsBytesSync());
++        final File digestFile = versionBase.childFile('classes.dex.sha256');
++        if (!digestFile.existsSync()) {
++          digestFile.createSync(recursive: true);
++        }
++        digestFile.writeAsStringSync(digest.toString());
++      }
++      // if(buildInfo.)
+     } on ProcessException catch (exception) {
+       consumeLog(exception.toString());
+       // Rethrow the exception if the error isn't handled by any of the
+@@ -438,6 +480,26 @@ class AndroidGradleBuilder implements AndroidBuilder {
+         ? findApkFilesModule(project, androidBuildInfo, _logger, _usage)
+         : listApkPaths(androidBuildInfo);
+     final Directory apkDirectory = getApkDirectory(project);
++     final Directory versionBase = project.directory
++        .childDirectory('build')
++        .childDirectory('deferred_libs')
++        .childDirectory(project.manifest.buildName ?? 'error_buildName')
++        .childDirectory(project.manifest.buildNumber ?? '0');
++    for (final String f in apkFilesPaths) {
++      final File apkFile = apkDirectory.childFile(f);
++      if (apkFile.existsSync()) {
++        final File apkCopyPath = versionBase.childFile(f);
++        apkFile.copySync(apkCopyPath.path);
++
++        final Digest digest = sha256.convert(apkCopyPath.readAsBytesSync());
++        final File digestFile =
++            versionBase.childFile('${apkCopyPath.basename}.sha256');
++        if (!digestFile.existsSync()) {
++          digestFile.createSync(recursive: true);
++        }
++        digestFile.writeAsStringSync(digest.toString());
++      }
++    }
+     final File apkFile = apkDirectory.childFile(apkFilesPaths.first);
+     if (!apkFile.existsSync()) {
+       _exitWithExpectedFileNotFound(
+diff --git a/packages/flutter_tools/lib/src/build_system/targets/android.dart b/packages/flutter_tools/lib/src/build_system/targets/android.dart
+index da264a832b..3bfcd11759 100644
+--- a/packages/flutter_tools/lib/src/build_system/targets/android.dart
++++ b/packages/flutter_tools/lib/src/build_system/targets/android.dart
+@@ -4,11 +4,14 @@
+ 
+ // @dart = 2.8
+ 
++import 'package:crypto/crypto.dart';
++
+ import '../../artifacts.dart';
+ import '../../base/build.dart';
+ import '../../base/deferred_component.dart';
+ import '../../base/file_system.dart';
+ import '../../build_info.dart';
++import '../../flutter_manifest.dart';
+ import '../../globals_null_migrated.dart' as globals show platform, printError, xcode;
+ import '../../project.dart';
+ import '../build_system.dart';
+@@ -339,8 +342,35 @@ class AndroidAotBundle extends Target {
+     if (!outputDirectory.existsSync()) {
+       outputDirectory.createSync(recursive: true);
+     }
++    final File abiStamp =
++        outputDirectory.childFile('app_stamp_$_androidAbiName.so');
++    if (!abiStamp.existsSync()) {
++      abiStamp.createSync(recursive: true);
++    }
+     final File outputLibFile = buildDir.childFile('app.so');
+     outputLibFile.copySync(outputDirectory.childFile('app.so').path);
++ final FlutterManifest s = FlutterProject.current().manifest;
++
++    final Directory versionBase = environment.projectDir
++        .childDirectory('build')
++        .childDirectory('deferred_libs')
++        .childDirectory(s.buildName)
++        .childDirectory(s.buildNumber ?? '0');
++
++    final Directory dir = versionBase.childDirectory(_androidAbiName);
++    if (outputLibFile.existsSync()) {
++      final File f = dir.childFile('libapp.so');
++      if (!f.existsSync()) {
++        f.createSync(recursive: true);
++      }
++      outputLibFile.copySync(f.path);
++      final Digest digest = sha256.convert(f.readAsBytesSync());
++      final File digestFile = dir.childFile('${f.basename}.sha256');
++      if (!digestFile.existsSync()) {
++        digestFile.createSync(recursive: true);
++      }
++      digestFile.writeAsStringSync(digest.toString());
++    }
+ 
+     final List<File> inputs = <File>[];
+     final List<File> outputs = <File>[];
+@@ -511,6 +541,50 @@ Depfile copyDeferredComponentSoFiles(
+       }
+     }
+   }
++  final FlutterManifest s = FlutterProject.current().manifest;
++
++  final Directory versionBase = env.projectDir
++      .childDirectory('build')
++      .childDirectory('deferred_libs')
++      .childDirectory(s.buildName)
++      .childDirectory(s.buildNumber ?? '0');
++  for (final String abi in abis) {
++    final Directory dir = versionBase.childDirectory(abi);
++    final Directory buildDirAbi = env.buildDir.childDirectory(abi);
++    final File mani = buildDirAbi.childFile('manifest.json');
++    if (mani.existsSync()) {
++      final File f = dir.childFile('manifest.json');
++      mani.copySync(f.path);
++      if (!f.existsSync()) {
++        f.createSync(recursive: true);
++      }
++      inputs.add(mani);
++      outputs.add(f);
++    }
++    for (final LoadingUnit unit in loadingUnits) {
++      // ensure the abi for the unit is one of the abis we build for.
++      final List<String> splitPath =
++          unit.path.split(env.fileSystem.path.separator);
++      if (splitPath[splitPath.length - 2] != abi) {
++        continue;
++      }
++      final File destination = dir.childFile('libapp.so-${unit.id}.part.so');
++      if (!destination.existsSync()) {
++        destination.createSync(recursive: true);
++      }
++      final File source = env.fileSystem.file(unit.path);
++      final Digest digest = sha256.convert(source.readAsBytesSync());
++      final File digestFile = dir.childFile('${destination.basename}.sha256');
++      if (!digestFile.existsSync()) {
++        digestFile.createSync(recursive: true);
++      }
++      digestFile.writeAsStringSync(digest.toString());
++      source.copySync(destination.path);
++      inputs.add(source);
++      outputs.add(destination);
++    }
++  }
++  // return Depfile(inputs, outputs);
+   // Copy unused loading units, which are included in the base module.
+   for (final String abi in abis) {
+     for (final LoadingUnit unit in loadingUnits) {
+diff --git a/packages/flutter_tools/lib/src/build_system/targets/deferred_components.dart b/packages/flutter_tools/lib/src/build_system/targets/deferred_components.dart
+index a01ab26bab..e303873145 100644
+--- a/packages/flutter_tools/lib/src/build_system/targets/deferred_components.dart
++++ b/packages/flutter_tools/lib/src/build_system/targets/deferred_components.dart
+@@ -4,11 +4,15 @@
+ 
+ // @dart = 2.8
+ 
++import 'dart:convert';
++
++import 'package:file/file.dart';
+ import 'package:meta/meta.dart';
+ 
+ import '../../android/deferred_components_gen_snapshot_validator.dart';
+ import '../../base/deferred_component.dart';
+ import '../../build_info.dart';
++import '../../flutter_manifest.dart';
+ import '../../project.dart';
+ import '../build_system.dart';
+ import '../depfile.dart';
+@@ -23,6 +27,7 @@ class DeferredComponentsGenSnapshotValidatorTarget extends Target {
+     @required this.nonDeferredComponentsDependencies,
+     this.title,
+     this.exitOnFail = true,
++    this.buildApk = false,
+   });
+ 
+   /// The [AndroidAotDeferredComponentsBundle] derived target instances this rule depends on.
+@@ -36,7 +41,7 @@ class DeferredComponentsGenSnapshotValidatorTarget extends Target {
+   /// Whether to exit the tool if a recommended change is found by the
+   /// [DeferredComponentsGenSnapshotValidator].
+   final bool exitOnFail;
+-
++  final bool buildApk;
+   /// The abis to validate.
+   List<String> get _abis {
+     final List<String> abis = <String>[];
+@@ -83,7 +88,7 @@ class DeferredComponentsGenSnapshotValidatorTarget extends Target {
+     validator = DeferredComponentsGenSnapshotValidator(
+       environment,
+       title: title,
+-      exitOnFail: exitOnFail,
++      exitOnFail: exitOnFail && !buildApk,
+     );
+ 
+     final List<LoadingUnit> generatedLoadingUnits = LoadingUnit.parseGeneratedLoadingUnits(
+@@ -101,7 +106,40 @@ class DeferredComponentsGenSnapshotValidatorTarget extends Target {
+       ..writeLoadingUnitsCache(generatedLoadingUnits);
+ 
+     validator.handleResults();
+-
++    if (buildApk) {
++      final FlutterManifest project = FlutterProject.current().manifest;
++      final File f = environment.projectDir
++          .childDirectory('build')
++          .childDirectory('deferred_libs')
++          .childDirectory(project.buildName ?? '_error_name')
++          .childDirectory(project.buildNumber ?? '_error_code')
++          .childFile('unitmap.json');
++      if (!f.existsSync()) {
++        f.createSync(recursive: true);
++      }
++      final Map<int, String> _mapping = <int, String>{};
++      for (final DeferredComponent component in project.deferredComponents) {
++        component.assignLoadingUnits(generatedLoadingUnits);
++        final Set<LoadingUnit> loadingUnits = component.loadingUnits;
++        if (loadingUnits != null) {
++          for (final LoadingUnit unit in loadingUnits) {
++            if (!_mapping.containsKey(unit.id)) {
++              _mapping[unit.id] = component.name;
++            }
++          }
++        }
++      }
++      for (final LoadingUnit unit in generatedLoadingUnits) {
++        if (!_mapping.containsKey(unit.id)) {
++          _mapping[unit.id] = '';
++          break;
++        }
++      }
++      final String s = jsonEncode(
++          // ignore: always_specify_types
++          _mapping.map((int key, String value) => MapEntry('$key', value)));
++      f.writeAsStringSync(s);
++    }
+     depfileService.writeToFile(
+       Depfile(validator.inputs, validator.outputs),
+       environment.buildDir.childFile('flutter_$name.d'),
+diff --git a/packages/flutter_tools/lib/src/commands/assemble.dart b/packages/flutter_tools/lib/src/commands/assemble.dart
+index 8b74194b81..2a461af609 100644
+--- a/packages/flutter_tools/lib/src/commands/assemble.dart
++++ b/packages/flutter_tools/lib/src/commands/assemble.dart
+@@ -129,6 +129,7 @@ class AssembleCommand extends FlutterCommand {
+       'resource-pool-size',
+       help: 'The maximum number of concurrent tasks the build system will run.',
+     );
++    argParser.addFlag('build-apk', help: 'support deferredComponents.');
+   }
+ 
+   final BuildSystem _buildSystem;
+@@ -296,6 +297,7 @@ class AssembleCommand extends FlutterCommand {
+         "Try re-running 'flutter build ios' or the appropriate build command."
+       );
+     }
++    final bool buildApk = boolArg('build-apk') ?? false;
+     if (FlutterProject.current().manifest.deferredComponents != null
+         && decodedDefines.contains('validate-deferred-components=true')
+         && deferredTargets.isNotEmpty
+@@ -305,6 +307,7 @@ class AssembleCommand extends FlutterCommand {
+         deferredComponentsDependencies: deferredTargets.cast<AndroidAotDeferredComponentsBundle>(),
+         nonDeferredComponentsDependencies: nonDeferredTargets,
+         title: 'Deferred components gen_snapshot validation',
++        buildApk: buildApk,
+       );
+     } else if (targets.length > 1) {
+       target = CompositeTarget(targets);
+diff --git a/packages/flutter_tools/lib/src/commands/build_apk.dart b/packages/flutter_tools/lib/src/commands/build_apk.dart
+index c335b6a536..5be229d2cd 100644
+--- a/packages/flutter_tools/lib/src/commands/build_apk.dart
++++ b/packages/flutter_tools/lib/src/commands/build_apk.dart
+@@ -4,11 +4,19 @@
+ 
+ // @dart = 2.8
+ 
++
++import 'dart:convert';
++
++import 'package:file/file.dart';
++
+ import '../android/android_builder.dart';
+ import '../android/build_validation.dart';
++import '../android/gradle.dart';
++import '../android/gradle_errors.dart';
+ import '../android/gradle_utils.dart';
+ import '../build_info.dart';
+ import '../cache.dart';
++import '../flutter_manifest.dart';
+ import '../globals_null_migrated.dart' as globals;
+ import '../project.dart';
+ import '../reporting/reporting.dart';
+@@ -48,6 +56,19 @@ class BuildApkCommand extends BuildSubCommand {
+         help: 'The target platform for which the app is compiled.',
+       );
+     usesTrackWidgetCreation(verboseHelp: verboseHelp);
++     argParser.addFlag(
++      'dfc',
++      negatable: true,
++      defaultsTo: false,
++      help: 'cmd: build apk --dfc, support deferredComponent.',
++    );
++    argParser.addFlag(
++      'multi',
++      negatable: true,
++      defaultsTo: true,
++      help: 'cmd: build apk --dfc --multi, 要手动注释\'settings.gradle\'中额外的\'include\','
++      '否则使用--no-multi(和 build appbundle 一样的步骤).',
++    );
+   }
+ 
+   @override
+@@ -95,18 +116,66 @@ class BuildApkCommand extends BuildSubCommand {
+       exitWithNoSdkMessage();
+     }
+     final BuildInfo buildInfo = await getBuildInfo();
++    final bool def = boolArg('dfc');
++    final bool multi = boolArg('multi');
++    if (def) {
++      buildInfo.androidProjectArgs.add('build-apk=true');
++    }
++    if(multi){
++      buildInfo.androidProjectArgs.add('multi=true');
++    }
+     final AndroidBuildInfo androidBuildInfo = AndroidBuildInfo(
+       buildInfo,
+       splitPerAbi: boolArg('split-per-abi'),
+       targetArchs: stringsArg('target-platform').map<AndroidArch>(getAndroidArchForName),
+     );
+     validateBuild(androidBuildInfo);
++
+     displayNullSafetyMode(androidBuildInfo.buildInfo);
++    final FlutterManifest manifest = FlutterProject.current().manifest;
++    final Directory projectDir = FlutterProject.current().directory;
++    final File versions =
++        projectDir.childDirectory('lib').childFile('versions_gen.dart');
++    if (!versions.existsSync()) {
++      versions.createSync(recursive: true);
++    }
++    final StringBuffer buffer = StringBuffer();
++    buffer
++      ..write('const versionName = "${manifest.buildName}";\n')
++      ..write('const versionNumber = ${manifest.buildNumber ?? 0};');
++    final File minVersionFile = projectDir
++        .childDirectory('build')
++        .childDirectory('deferred_libs')
++        .childDirectory(manifest.buildName ?? '_error_name')
++        .childFile('minversion.json');
++    if (!minVersionFile.existsSync()) {
++      minVersionFile.createSync(recursive: true);
++    }
++    minVersionFile
++        // ignore: always_specify_types
++        .writeAsStringSync(jsonEncode({
++      'versionName': manifest.buildName,
++      'versionNumber': manifest.buildNumber ?? 0,
++    }));
++    versions.writeAsStringSync(buffer.toString());
++    final AndroidBuilder builder = androidBuilder;
++    if (def && builder is AndroidGradleBuilder) {
++      print('build apk deferred mode.');
++      await builder.buildGradleApp(
++          project: FlutterProject.current(),
++          androidBuildInfo: androidBuildInfo,
++          target: targetFile,
++          isBuildingBundle: false,
++          deferredComponentsEnabled: true,
++          validateDeferredComponents: true,
++          localGradleErrors: gradleErrors);
++    } else {
+     await androidBuilder.buildApk(
+       project: FlutterProject.current(),
+       target: targetFile,
+       androidBuildInfo: androidBuildInfo,
+     );
++    }
+     return FlutterCommandResult.success();
+   }
+ }
