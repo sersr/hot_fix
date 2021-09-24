@@ -143,7 +143,7 @@ class DeferredIsolateMain extends DeferredLoadEventsResolveMain {
     Log.i('$appBasePath, $abi', onlyDebug: false);
     _initTask?.complete();
     _done = true;
-    await checkUpdate();
+    // await checkUpdate();
   }
 
   String get localAppSoPath => path.join(appBasePath, appName);
@@ -233,7 +233,7 @@ class DeferredIsolateMain extends DeferredLoadEventsResolveMain {
 
   /// 确保在同一时间不会运行两次任务，在这里为[_checkUpdate]
   @override
-  Future<void> checkUpdate() {
+  Future<bool> checkUpdate() {
     return EventQueue.runTaskOnQueue('hot_fix', _checkUpdate);
   }
 
@@ -241,7 +241,7 @@ class DeferredIsolateMain extends DeferredLoadEventsResolveMain {
     return EventQueue.getQueueRunner('hot_fix');
   }
 
-  Future<void> _checkUpdate() async {
+  Future<bool> _checkUpdate() async {
     final localDir = Directory(localUnitPath);
     if (await localDir.exists()) {
       final dirs = await localDir.list(followLinks: false).toList();
@@ -264,7 +264,7 @@ class DeferredIsolateMain extends DeferredLoadEventsResolveMain {
     Log.i('new $appName updateClass.', onlyDebug: false);
     final updated = await updateDex();
     Log.i('new $appName updateClass end $updated.', onlyDebug: false);
-    if (updated) return;
+    if (updated) return true;
 
     try {
       Log.i('new $appName start.', onlyDebug: false);
@@ -290,10 +290,12 @@ class DeferredIsolateMain extends DeferredLoadEventsResolveMain {
       if (newVersionNumber != null && newVersionNumber > versionNumber) {
         final name = '$versionName/$newVersionNumber/$abi/$appName';
         await _getAndWrite(name, localAppSoPath);
+        return true;
       }
     } catch (e) {
       Log.i(': error $e', onlyDebug: false);
     }
+    return false;
   }
 
   /// 首先将下载的资源存储在临时文件中，完成之后重命名原来的文件名，

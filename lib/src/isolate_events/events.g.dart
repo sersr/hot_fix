@@ -47,7 +47,7 @@ mixin DeferredLoadEventsResolve on Resolve, DeferredLoadEvents {
 
   FutureOr<Map<String, Object>?> _loadLibrary_0(args) => loadLibrary(args);
   FutureOr<void> _init_1(args) => init(args);
-  FutureOr<void> _checkUpdate_2(args) => checkUpdate();
+  FutureOr<bool?> _checkUpdate_2(args) => checkUpdate();
 }
 
 /// implements [DeferredLoadEvents]
@@ -62,7 +62,7 @@ mixin DeferredLoadEventsMessager {
     return sendEvent.sendMessage(DeferredLoadEventsMessage.init, data);
   }
 
-  FutureOr<void> checkUpdate() async {
+  FutureOr<bool?> checkUpdate() async {
     return sendEvent.sendMessage(DeferredLoadEventsMessage.checkUpdate, null);
   }
 }

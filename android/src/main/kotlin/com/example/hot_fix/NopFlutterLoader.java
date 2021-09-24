@@ -34,6 +34,7 @@ import java.nio.file.CopyOption;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
@@ -64,7 +65,11 @@ public class NopFlutterLoader extends FlutterLoader {
         super(flutterJNI);
         this.flutterJNI = flutterJNI;
     }
+    public NopFlutterLoader(@NonNull FlutterJNI flutterJNI, @NonNull ExecutorService executorService) {
+        super(flutterJNI, executorService);
+        this.flutterJNI = flutterJNI;
 
+    }
     private boolean initialized = false;
     @Nullable
     private Settings settings;

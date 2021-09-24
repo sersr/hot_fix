@@ -10,8 +10,18 @@ import android.util.Log
 
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterJNI
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 
 class ApplicationDelegate {
+  private class NamedThreadFactory : ThreadFactory {
+    private var threadId = 0
+    override fun newThread(command: Runnable): Thread {
+      val thread = Thread(command)
+      thread.name = "flutter-worker-" + threadId++
+      return thread
+    }
+  }
   companion object {
     private const val TAG = "ApplicationDelegate"
 
@@ -25,14 +35,15 @@ class ApplicationDelegate {
       val info = applicationContext.applicationInfo
 
       Log.w(TAG, "nativeLibraryDir: ${info.nativeLibraryDir}")
-
+      val executorService = Executors.newCachedThreadPool(NamedThreadFactory())
       val fac = FlutterJNI.Factory()
       val jni = fac.provideFlutterJNI()
-      val loader = NopFlutterLoader(jni)
+      val loader = NopFlutterLoader(jni,executorService)
 
       val injBuilder = FlutterInjector.Builder()
         .setFlutterJNIFactory(fac)
         .setFlutterLoader(loader)
+
         .setDeferredComponentManager(
           DeferredLoadNativeDir(applicationContext, jni)
         )

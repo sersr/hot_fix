@@ -9,5 +9,5 @@ abstract class DeferredLoadEvents {
   DeferredLoadEvents get events => this;
   FutureOr<Map<String, Object>?> loadLibrary(Map<Object, Object?> data);
   FutureOr<void> init(Map<Object, Object?> data);
-  FutureOr<void> checkUpdate();
+  FutureOr<bool?> checkUpdate();
 }
