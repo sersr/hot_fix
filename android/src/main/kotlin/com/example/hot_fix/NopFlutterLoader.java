@@ -8,11 +8,14 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.hardware.display.DisplayManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.FileUtils;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.Display;
 import android.view.WindowManager;
 
 import androidx.annotation.NonNull;
@@ -115,8 +118,20 @@ public class NopFlutterLoader extends FlutterLoader {
         initStartTimestampMillis = SystemClock.uptimeMillis();
         flutterApplicationInfo = ApplicationInfoLoader.load(appContext);
         automaticallyRegisterPlugins = true;
-        VsyncWaiter.getInstance((WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE))
-                .init();
+        float fps;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            final DisplayManager dm = appContext.getSystemService(DisplayManager.class);
+            final Display primaryDisplay = dm.getDisplay(Display.DEFAULT_DISPLAY);
+            fps = primaryDisplay.getRefreshRate();
+        } else {
+            fps =
+                    ((WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE))
+                            .getDefaultDisplay()
+                            .getRefreshRate();
+        }
+        VsyncWaiter.getInstance(fps).init();
+//        VsyncWaiter.getInstance((WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE))
+//                .init();
 
         // Use a background thread for initialization tasks that require disk access.
         Callable<InitResult> initTask =
